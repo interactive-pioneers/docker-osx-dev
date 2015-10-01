@@ -31,6 +31,8 @@ readonly ENV_FILE_COMMENT="\n# docker-osx-dev\n"
 # Script constants
 readonly HOSTS_FILE="/etc/hosts"
 readonly SYNC_COMMAND="sync"
+readonly WATCH_ONLY_COMMAND="watch-only"
+readonly SYNC_ONLY_COMMAND="sync-only"
 readonly INSTALL_COMMAND="install"
 readonly TEST_COMMAND="test_mode"
 readonly DEFAULT_COMMAND="$SYNC_COMMAND"
@@ -413,7 +415,7 @@ function configure_docker_machine {
 function init_docker_machine {
   log_info "Initializing docker machine $DOCKER_MACHINE_NAME"
   docker-machine start "$DOCKER_MACHINE_NAME"
-  eval "$(docker-machine env $DOCKER_MACHINE_NAME)"
+  eval "$(docker-machine env --shell bash $DOCKER_MACHINE_NAME)"
   configure_docker_machine
   if [[ $DOCKER_MACHINE_DRIVER_NAME == "virtualbox" ]]; then
     check_for_shared_folders
@@ -743,7 +745,7 @@ function do_rsync {
   local readonly path="$1"
   local readonly path_to_sync=$(find_path_to_sync_parent "$path")
 
-  if [[ -z "$paths_to_sync" ]]; then
+  if [[ -z "$path_to_sync" ]]; then
     log_error "Internal error: can't sync '$path' because it doesn't seem to be part of any paths configured for syncing: $PATHS_TO_SYNC"
   else
     local readonly parent_folder=$(dirname "$path_to_sync")
@@ -766,7 +768,7 @@ function do_rsync {
 }
 
 #
-# Usage: sync [PATHS ...]
+# Usage: do_sync [PATHS ...]
 #
 # Uses rsync to sync PATHS to the Boot2Docker VM. If one of the values in PATHS
 # is not valid (e.g. doesn't exist), it will be ignored.
@@ -776,7 +778,7 @@ function do_rsync {
 # rsync /foo /bar
 #   Result: /foo and /bar are rsync'ed to the Boot2DockerVM
 #
-function sync {
+function do_sync {
   local readonly paths_to_sync=("$@")
   local path=""
 
@@ -814,7 +816,7 @@ function initial_sync {
   $DOCKER_HOST_SSH_COMMAND "$ssh_cmd"
 
   log_debug "Starting sync paths: $paths_to_sync"
-  sync "${paths_to_sync[@]}"
+  do_sync "${paths_to_sync[@]}"
   log_info "Initial sync done"
 }
 
@@ -833,7 +835,7 @@ function watch {
   local file=""
   eval "$fswatch_cmd" | while read -d "" file
   do
-    sync "$file"
+    do_sync "$file"
   done
 }
 
@@ -852,6 +854,8 @@ function instructions {
   echo -e
   echo -e "Commands:"
   echo -e "  $SYNC_COMMAND\t\tStart file syncing. This is the default if no COMMAND is specified."
+  echo -e "  $WATCH_ONLY_COMMAND\tWatch the file system for changes, without syncing first."
+  echo -e "  $SYNC_ONLY_COMMAND\tSync the file system and exit, without watching afterwords."
   echo -e "  $INSTALL_COMMAND\tInstall docker-osx-dev and all of its dependencies."
   echo -e
   echo -e "Options:"
@@ -1068,9 +1072,9 @@ function configure_includes {
 }
 
 #
-# Runs the docker-osx-dev script to kick off file watching and syncing.
+# Runs the docker-osx-dev script to to sync files.
 #
-function watch_and_sync {
+function sync {
   log_info "Starting docker-osx-dev file syncing"
   init_docker_host
   install_rsync_on_docker_host
@@ -1151,6 +1155,12 @@ function handle_command {
       "$SYNC_COMMAND")
         cmd="$SYNC_COMMAND"
         ;;
+      "$SYNC_ONLY_COMMAND")
+        cmd="$SYNC_ONLY_COMMAND"
+        ;;
+      "$WATCH_ONLY_COMMAND")
+        cmd="$WATCH_ONLY_COMMAND"
+        ;;
       "$INSTALL_COMMAND")
         cmd="$INSTALL_COMMAND"
         ;;
@@ -1207,12 +1217,23 @@ function handle_command {
   done
 
   case "$cmd" in
-    "$SYNC_COMMAND")
+    "$SYNC_COMMAND" | "$SYNC_ONLY_COMMAND" | "$WATCH_ONLY_COMMAND")
       configure_log_level "$log_level"
       configure_paths_to_sync "$docker_compose_file" "${paths_to_sync[@]}"
       configure_excludes "$ignore_file" "${excludes[@]}"
       configure_includes "$ignore_file" "${includes[@]}"
-      watch_and_sync
+      case "$cmd" in
+      "$SYNC_COMMAND")
+        sync
+        watch
+        ;;
+      "$SYNC_ONLY_COMMAND")
+        sync
+        ;;
+      "$WATCH_ONLY_COMMAND")
+        watch
+        ;;
+      esac
       ;;
     "$INSTALL_COMMAND")
       configure_log_level "$log_level"
